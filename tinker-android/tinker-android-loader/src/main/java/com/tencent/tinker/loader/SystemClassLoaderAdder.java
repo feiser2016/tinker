@@ -34,14 +34,13 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
-import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import dalvik.system.BaseDexClassLoader;
 import dalvik.system.DexFile;
 import dalvik.system.PathClassLoader;
 
@@ -55,14 +54,14 @@ public class SystemClassLoaderAdder {
     private static int sPatchDexCount = 0;
 
     @SuppressLint("NewApi")
-    public static void installDexes(Application application, PathClassLoader loader, File dexOptDir, List<File> files)
+    public static void installDexes(Application application, BaseDexClassLoader loader, File dexOptDir, List<File> files, boolean isProtectedApp)
         throws Throwable {
         Log.i(TAG, "installDexes dexOptDir: " + dexOptDir.getAbsolutePath() + ", dex size:" + files.size());
 
         if (!files.isEmpty()) {
             files = createSortedAdditionalPathEntries(files);
             ClassLoader classLoader = loader;
-            if (Build.VERSION.SDK_INT >= 24 && !checkIsProtectedApp(files)) {
+            if (Build.VERSION.SDK_INT >= 24 && !isProtectedApp) {
                 classLoader = AndroidNClassLoader.inject(loader, application);
             }
             //because in dalvik, if inner class is not the same classloader with it wrapper class.
@@ -88,6 +87,23 @@ public class SystemClassLoaderAdder {
         }
     }
 
+    @SuppressLint("NewApi")
+    public static void installApk(PathClassLoader loader, List<File> files) throws Throwable {
+        if (!files.isEmpty()) {
+            files = createSortedAdditionalPathEntries(files);
+            ClassLoader classLoader = loader;
+            ArkHot.install(classLoader, files);
+            sPatchDexCount = files.size();
+            Log.i(TAG, "after loaded classloader: " + classLoader + ", dex size:" + sPatchDexCount);
+
+            if (!checkDexInstall(classLoader)) {
+                // reset patch dex
+//                SystemClassLoaderAdder.uninstallPatchDex(classLoader);
+//                throw new TinkerRuntimeException(ShareConstants.CHECK_DEX_INSTALL_FAIL);
+            }
+        }
+    }
+
     public static void uninstallPatchDex(ClassLoader classLoader) throws Throwable {
         if (sPatchDexCount <= 0) {
             return;
@@ -103,6 +119,7 @@ public class SystemClassLoaderAdder {
             try {
                 ShareReflectUtil.reduceFieldArray(classLoader, "mDexs", sPatchDexCount);
             } catch (Exception e) {
+                // Ignored.
             }
         }
     }
@@ -113,39 +130,6 @@ public class SystemClassLoaderAdder {
         boolean isPatch = (boolean) filed.get(null);
         Log.w(TAG, "checkDexInstall result:" + isPatch);
         return isPatch;
-    }
-
-    private static boolean checkIsProtectedApp(List<File> files) {
-        if (!files.isEmpty()) {
-            for (File file : files) {
-                if (file == null) {
-                    continue;
-                }
-                final String fileName = file.getName();
-                if (fileName.startsWith(ShareConstants.CHANGED_CLASSES_DEX_PREFIX)) {
-                    return true;
-                } else if (fileName.endsWith(ShareConstants.APK_SUFFIX) || file.getName().endsWith(ShareConstants.JAR_SUFFIX)) {
-                    ZipFile zf = null;
-                    try {
-                        zf = new ZipFile(file);
-                        final Enumeration<? extends ZipEntry> entries = zf.entries();
-                        while (entries.hasMoreElements()) {
-                            final ZipEntry entry = entries.nextElement();
-                            if (entry.getName().startsWith(ShareConstants.CHANGED_CLASSES_DEX_PREFIX)) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    } catch (IOException e) {
-                        // Usually we shouldn't reach here.
-                        return false;
-                    } finally {
-                        SharePatchFileUtil.closeZip(zf);
-                    }
-                }
-            }
-        }
-        return false;
     }
 
     private static List<File> createSortedAdditionalPathEntries(List<File> additionalPathEntries) {
@@ -203,6 +187,27 @@ public class SystemClassLoaderAdder {
         });
 
         return result;
+    }
+
+    /**
+     * Installer for platform huawei ark
+     */
+    private static final class ArkHot {
+        private static void install(ClassLoader loader, List<File> additionalClassPathEntries)
+                throws IllegalArgumentException, IllegalAccessException, NoSuchMethodException,
+                InvocationTargetException, IOException, ClassNotFoundException, SecurityException {
+            Class<?>  extendedClassLoaderHelper = ClassLoader.getSystemClassLoader()
+                    .getParent().loadClass("com.huawei.ark.classloader.ExtendedClassLoaderHelper");
+
+            for (File file : additionalClassPathEntries) {
+                String path = file.getCanonicalPath();
+                Method applyPatchMethod = extendedClassLoaderHelper.getDeclaredMethod(
+                        "applyPatch", ClassLoader.class, String.class);
+                applyPatchMethod.setAccessible(true);
+                applyPatchMethod.invoke(null, loader, path);
+                Log.i(TAG, "ArkHot install path = " + path);
+            }
+        }
     }
 
     /**
@@ -400,7 +405,7 @@ public class SystemClassLoaderAdder {
             try {
                 ShareReflectUtil.expandFieldArray(loader, "mDexs", extraDexs);
             } catch (Exception e) {
-
+                // Ignored.
             }
         }
     }

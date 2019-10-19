@@ -175,10 +175,10 @@ public class DexDiffPatchInternal extends BasePatchInternal {
         File dexFiles = new File(dir);
         File[] files = dexFiles.listFiles();
         List<File> legalFiles = new ArrayList<>();
-        // may have directory in android o
         if (files != null) {
             for (File file : files) {
                 final String fileName = file.getName();
+                // may have directory in android o
                 if (file.isFile()
                     &&  (fileName.endsWith(ShareConstants.DEX_SUFFIX)
                       || fileName.endsWith(ShareConstants.JAR_SUFFIX)
@@ -342,7 +342,7 @@ public class DexDiffPatchInternal extends BasePatchInternal {
 
             // try parallel dex optimizer
             TinkerDexOptimizer.optimizeAll(
-                    dexFiles, optimizeDexDirectoryFile,
+                context, dexFiles, optimizeDexDirectoryFile,
                 new TinkerDexOptimizer.ResultCallback() {
                     long startTime;
 
@@ -622,15 +622,15 @@ public class DexDiffPatchInternal extends BasePatchInternal {
         return isExtractionSuccessful;
     }
 
-//    /**
-//     * reject dalvik vm, but sdk version is larger than 21
-//     */
-//    private static void checkVmArtProperty() {
-//        boolean art = ShareTinkerInternals.isVmArt();
-//        if (!art && Build.VERSION.SDK_INT >= 21) {
-//            throw new TinkerRuntimeException(ShareConstants.CHECK_VM_PROPERTY_FAIL + ", it is dalvik vm, but sdk version " + Build.VERSION.SDK_INT + " is larger than 21!");
-//        }
-//    }
+    // /**
+    //  * reject dalvik vm, but sdk version is larger than 21
+    //  */
+    // private static void checkVmArtProperty() {
+    //     boolean art = ShareTinkerInternals.isVmArt();
+    //     if (!art && Build.VERSION.SDK_INT >= 21) {
+    //         throw new TinkerRuntimeException(ShareConstants.CHECK_VM_PROPERTY_FAIL + ", it is dalvik vm, but sdk version " + Build.VERSION.SDK_INT + " is larger than 21!");
+    //     }
+    // }
 
     private static boolean extractDexFile(ZipFile zipFile, ZipEntry entryFile, File extractTo, ShareDexDiffPatchInfo dexInfo) throws IOException {
         final String fileMd5 = isVmArt ? dexInfo.destMd5InArt : dexInfo.destMd5InDvm;

@@ -29,6 +29,8 @@ import org.gradle.api.Project
 import org.gradle.api.tasks.TaskAction
 import org.gradle.util.GFileUtils
 
+import java.lang.reflect.Field
+import java.lang.reflect.Modifier
 import java.util.regex.Matcher
 import java.util.regex.Pattern
 
@@ -130,17 +132,49 @@ public class TinkerResourceIdTask extends DefaultTask {
      * add --stable-ids param to aaptOptions's additionalParameters
      */
     List<String> addStableIdsFileToAdditionalParameters(def processAndroidResourceTask) {
-        def aaptOptions = processAndroidResourceTask.getAaptOptions()
+        def aaptOptions
+        try {
+            aaptOptions = processAndroidResourceTask.getAaptOptions()
+        } catch (Exception e) {
+            //agp 3.5.0+
+            aaptOptions = Class.forName("com.android.build.gradle.internal.res.LinkApplicationAndroidResourcesTask").metaClass.getProperty(processAndroidResourceTask, "aaptOptions")
+        }
         List<String> additionalParameters = new ArrayList<>()
         List<String> originalAdditionalParameters = aaptOptions.getAdditionalParameters()
         if (originalAdditionalParameters != null) {
             additionalParameters.addAll(originalAdditionalParameters)
         }
-        aaptOptions.setAdditionalParameters(additionalParameters)
+        replaceFinalField(aaptOptions.getClass().getName(), "additionalParameters", aaptOptions, additionalParameters)
         additionalParameters.add("--stable-ids")
         additionalParameters.add(project.file(RESOURCE_PUBLIC_TXT).getAbsolutePath())
         project.logger.error("tinker add additionalParameters --stable-ids ${project.file(RESOURCE_PUBLIC_TXT).getAbsolutePath()}")
         return additionalParameters
+    }
+
+    /**
+     * replace final field
+     */
+    private static void replaceFinalField(String className, String fieldName, Object instance, Object fieldValue) {
+        final Class targetClazz = Class.forName(className)
+        Class currClazz = targetClazz
+        Field field = null
+        while (true) {
+            try {
+                field = currClazz.getDeclaredField(fieldName)
+                break
+            } catch (NoSuchFieldException e) {
+                if (currClazz.equals(Object.class)) {
+                    throw e
+                } else {
+                    currClazz = currClazz.getSuperclass()
+                }
+            }
+        }
+        Field modifiersField = Field.class.getDeclaredField("modifiers")
+        modifiersField.setAccessible(true)
+        modifiersField.setInt(field, field.getModifiers() & ~Modifier.FINAL)
+        field.setAccessible(true)
+        field.set(instance, fieldValue)
     }
 
     /**
@@ -150,7 +184,17 @@ public class TinkerResourceIdTask extends DefaultTask {
         Map<String, String> styles = new HashMap<>()
         def mergeResourcesTask = project.tasks.findByName("merge${variantName.capitalize()}Resources")
         List<File> resDirCandidateList = new ArrayList<>()
-        resDirCandidateList.add(mergeResourcesTask.outputDir)
+        try {
+            def output = mergeResourcesTask.outputDir
+            if (output instanceof File) {
+                resDirCandidateList.add(output)
+            } else {
+                resDirCandidateList.add(output.getAsFile().get())
+            }
+        } catch (Exception ignore) {
+
+        }
+
         resDirCandidateList.add(new File(mergeResourcesTask.getIncrementalFolder(), "merged.dir"))
         resDirCandidateList.each {
             it.eachFileRecurse(FileType.FILES) {

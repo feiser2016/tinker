@@ -29,6 +29,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.List;
 
+import dalvik.system.BaseDexClassLoader;
 import dalvik.system.DexFile;
 import dalvik.system.PathClassLoader;
 
@@ -40,19 +41,24 @@ class AndroidNClassLoader extends PathClassLoader {
     private static final String TAG = "Tinker.NClassLoader";
 
     private static Object oldDexPathListHolder = null;
-    private static String baseApkFullPath = null;
+    private static String packageName = "";
 
-    private final PathClassLoader originClassLoader;
-    private String applicationClassName;
+    private final ClassLoader originClassLoader;
+    private String applicationClassName = "";
 
-    private AndroidNClassLoader(String dexPath, PathClassLoader parent, Application application) {
+    private AndroidNClassLoader(String dexPath, ClassLoader parent, Application application) {
         super(dexPath, parent.getParent());
         originClassLoader = parent;
         String name = application.getClass().getName();
         if (name != null && !name.equals("android.app.Application")) {
             applicationClassName = name;
         }
-        baseApkFullPath = application.getPackageCodePath();
+        packageName = application.getPackageName();
+    }
+
+    private AndroidNClassLoader(String dexPath, ClassLoader parent) {
+        super(dexPath, parent);
+        originClassLoader = parent;
     }
 
     @SuppressWarnings("unchecked")
@@ -75,7 +81,10 @@ class AndroidNClassLoader extends PathClassLoader {
             if (dexFile == null || dexFile.getName() == null) {
                 continue;
             }
-            if (!dexFile.getName().equals(baseApkFullPath)) {
+            // Skip dexes which is not belong to our app.
+            // Then patched dexes would be injected in SystemClassLoaderAdder class.
+            final String dexFileName = dexFile.getName();
+            if (!dexFileName.contains("/" + packageName)) {
                 continue;
             }
             if (isFirstItem) {
@@ -106,7 +115,7 @@ class AndroidNClassLoader extends PathClassLoader {
         return dexPathListConstructor.newInstance(newDefiningContext, dexPath, libraryPath, null);
     }
 
-    private static AndroidNClassLoader createAndroidNClassLoader(PathClassLoader originalClassLoader, Application application) throws Exception {
+    private static AndroidNClassLoader createAndroidNClassLoader(BaseDexClassLoader originalClassLoader, Application application) throws Exception {
         //let all element ""
         final AndroidNClassLoader androidNClassLoader = new AndroidNClassLoader("",  originalClassLoader, application);
         final Field pathListField = ShareReflectUtil.findField(originalClassLoader, "pathList");
@@ -152,20 +161,27 @@ class AndroidNClassLoader extends PathClassLoader {
         Thread.currentThread().setContextClassLoader(reflectClassLoader);
     }
 
-    public static AndroidNClassLoader inject(PathClassLoader originClassLoader, Application application) throws Exception {
+    public static void triggerDex2Oat(Context context, String dexPath) {
+        final ClassLoader bootClassLoader = Context.class.getClassLoader();
+        new AndroidNClassLoader(dexPath, bootClassLoader);
+    }
+
+    public static AndroidNClassLoader inject(BaseDexClassLoader originClassLoader, Application application) throws Exception {
         AndroidNClassLoader classLoader = createAndroidNClassLoader(originClassLoader, application);
         reflectPackageInfoClassloader(application, classLoader);
         return classLoader;
     }
 
     public Class<?> findClass(String name) throws ClassNotFoundException {
-        // app class use default pathClassloader to load
+        // app class use default PathClassloader to load
         if (applicationClassName != null && applicationClassName.equals(name)) {
             return originClassLoader.loadClass(name);
         } else if (name != null && name.startsWith("com.tencent.tinker.loader.")
                 && !name.equals(SystemClassLoaderAdder.CHECK_DEX_CLASS)) {
             return originClassLoader.loadClass(name);
-        } else if (name != null && name.startsWith("org.apache.http.")) {
+        } else if (name != null &&  (name.startsWith("org.apache.commons.codec.")
+                                     || name.startsWith("org.apache.commons.logging.")
+                                     || name.startsWith("org.apache.http."))) {
             // Here's the whole story:
             //   Some app use apache wrapper library to access Apache utilities. Classes in apache wrapper
             //   library may be conflict with those preloaded in BootClassLoader.
